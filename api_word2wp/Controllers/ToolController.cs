@@ -20,6 +20,8 @@ using ImageInfo = OpenXmlPowerTools.ImageInfo;
 using System.Drawing.Imaging;
 using System.Linq;
 using DocumentFormat.OpenXml.Vml.Office;
+using System.Text.RegularExpressions;
+using System.Net.Http;
 
 namespace api_word2wp.Controllers
 {
@@ -40,6 +42,79 @@ namespace api_word2wp.Controllers
             _cloudinary = new Cloudinary(cloudinaryAccount);
             _category = category;
             _post = post;
+        }
+
+        [HttpPost("upload")]
+        public async Task<ResponseResult<CreatePost>> UploadFileZip(List<IFormFile> files, string categories)
+        {
+            try
+            {
+                if (files.Count == 0) return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Vui lòng chọn file", new CreatePost());
+                if (string.IsNullOrEmpty(categories)) return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Vui lòng chọn thể loại ", new CreatePost());
+                CreatePost result = new CreatePost();
+                foreach (IFormFile file in files)
+                {
+                    var extension = System.IO.Path.GetExtension(file.FileName);
+                    if (extension == ".doc" || extension == ".docx")
+                    {
+                        using (MemoryStream memoryStream = new MemoryStream())
+                        {
+                            file.CopyTo(memoryStream);
+                            string fileName = Path.GetFileNameWithoutExtension(file.FileName);
+                            bool created = await ConvertToHtml(memoryStream, fileName, categories);
+                            if (created) result.Success.Add(file.FileName);
+                            else result.Failed.Add(file.FileName);
+                        }
+                    }
+                    else if (extension == ".zip")
+                    {
+                        using (var memoryStream = new MemoryStream())
+                        {
+                            file.CopyTo(memoryStream);
+                            memoryStream.Position = 0;
+
+                            using (var archive = new ZipArchive(memoryStream))
+                            {
+                                if (archive.Entries.Any(entry => !IsDocOrDocx(entry.FullName)))
+                                {
+                                    return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Tồn tại file không đúng định dạng trong zip", new CreatePost());
+                                }
+                                foreach (var entry in archive.Entries)
+                                {
+                                    var entryMemoryStream = new MemoryStream();
+                                    string fileName = Path.GetFileNameWithoutExtension(entry.Name);
+                                    using (var entryStream = entry.Open())
+                                    {
+                                        entryStream.CopyTo(entryMemoryStream);
+                                        entryMemoryStream.Position = 0;
+
+                                        bool created = await ConvertToHtml(entryMemoryStream, fileName, categories);
+                                        if (created) result.Success.Add(entry.FullName);
+                                        else result.Failed.Add(entry.FullName);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    else
+                    {
+                        return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "File không đúng định dạng", new CreatePost());
+                    }
+                }
+
+                return new ResponseResult<CreatePost>(RetCodeEnum.Ok, RetCodeEnum.Ok.ToString(), result);
+            }
+            catch (Exception ex)
+            {
+                return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Đã có lỗi xảy ra", new CreatePost());
+            }
+        }
+
+        [HttpGet("categories")]
+        public async Task<ResponseResult<List<WpCategory>>> List()
+        {
+            List<WpCategory> categories = await _category.GetList();
+            return new ResponseResult<List<WpCategory>>(RetCodeEnum.Ok, RetCodeEnum.Ok.ToString(), categories);
         }
 
         private async Task<bool> ConvertToHtml(Stream memoryStream, string fileName, string category)
@@ -85,26 +160,15 @@ namespace api_word2wp.Controllers
                 using (WordprocessingDocument doc = WordprocessingDocument.Open(memoryStream, true))
                 {
                     XElement html = OpenXmlPowerTools.HtmlConverter.ConvertToHtml(doc, convSettings);
-                    
+
                     XElement htmlElement = new XElement(Xhtml.html, html);
 
-                    htmlString = htmlElement.ToString().Replace("&#x200f;", "");
+                    htmlString = RemoveLRMCharacter(htmlString);
+                    htmlString = RemoveHtmlTags(htmlString);
+                    htmlString = await InlinerCSS(htmlString);
 
-                    HtmlDocument htmlDoc = new HtmlDocument();
-                    htmlDoc.LoadHtml(htmlString);
-                    HtmlNode headNode = htmlDoc.DocumentNode.SelectSingleNode("//head");
-                    HtmlNode styleNode = headNode.SelectSingleNode("style");
-                    string styleContent = styleNode.InnerHtml;
-                    StringBuilder newHtmlBuilder = new StringBuilder();
-                    newHtmlBuilder.Append("<style>");
-                    newHtmlBuilder.Append(styleContent);
-                    newHtmlBuilder.Append("</style>");
-                    newHtmlBuilder.Append(htmlDoc.DocumentNode.SelectSingleNode("//body").OuterHtml);
-                    htmlString = newHtmlBuilder.ToString();
-                    htmlString = "<div id=\"wp-container\">" + htmlString + "</div>";
                     if (!string.IsNullOrEmpty(htmlString))
                     {
-                        htmlString = await InlinerCSS(htmlString);
                         result = await _post.AddPost(htmlString, fileName, thumbnail, category);
                     }
                 }
@@ -117,119 +181,66 @@ namespace api_word2wp.Controllers
             return result;
         }
 
+        #region ======= Xử lí html =======
+        private string RemoveLRMCharacter(string htmlString)
+        {
+            var doc = new HtmlDocument();
+            doc.LoadHtml(htmlString);
 
-        [HttpPost("upload")]
-        public async Task<ResponseResult<CreatePost>> UploadFileZip(IFormFile file, string categories)
+            foreach (var textNode in doc.DocumentNode.SelectNodes("//text()"))
+            {
+                var cleanedText = Regex.Replace(textNode.InnerText, @"[\u200E\u200F]", "");
+                textNode.InnerHtml = HtmlEntity.DeEntitize(cleanedText);
+            }
+
+            return doc.DocumentNode.OuterHtml;
+        }
+        private string RemoveHtmlTags(string htmlString)
+        {
+            HtmlDocument htmlDoc = new HtmlDocument();
+            htmlDoc.LoadHtml(htmlString);
+            HtmlNode headNode = htmlDoc.DocumentNode.SelectSingleNode("//head");
+            HtmlNode styleNode = headNode.SelectSingleNode("style");
+            string styleContent = styleNode.InnerHtml;
+            StringBuilder newHtmlBuilder = new StringBuilder();
+            newHtmlBuilder.Append("<style>");
+            newHtmlBuilder.Append(styleContent);
+            newHtmlBuilder.Append("</style>");
+            newHtmlBuilder.Append(htmlDoc.DocumentNode.SelectSingleNode("//body").OuterHtml);
+            return newHtmlBuilder.ToString();
+        }
+        private async Task<string> InlinerCSS(string html)
         {
             try
             {
-                if (string.IsNullOrEmpty(categories)) return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Vui lòng chọn thể loại ", new CreatePost());
-                var extension = System.IO.Path.GetExtension(file.FileName);
-                CreatePost result = new CreatePost();
-                if (extension == ".doc" || extension == ".docx")
+                using (var client = new HttpClient())
                 {
-                    using (MemoryStream memoryStream = new MemoryStream())
+                    var formData = new MultipartFormDataContent();
+                    formData.Add(new StringContent(html), "html");
+                    var response = await client.PostAsync("https://templates.mailchimp.com/services/inline-css/", formData);
+                    if (response.IsSuccessStatusCode)
                     {
-                        file.CopyTo(memoryStream);
-                        string fileName = Path.GetFileNameWithoutExtension(file.FileName);
-                        bool created = await ConvertToHtml(memoryStream, fileName, categories);
-                        if (created) result.Success.Add(file.FileName);
-                        else result.Failed.Add(file.FileName);
-                        return new ResponseResult<CreatePost>(RetCodeEnum.Ok, RetCodeEnum.Ok.ToString(), result);
-                    }
-
-                }
-                else if (extension == ".zip")
-                {
-                    using (var memoryStream = new MemoryStream())
-                    {
-                        file.CopyTo(memoryStream);
-                        memoryStream.Position = 0;
-
-                        // Giải nén tệp ZIP từ MemoryStream
-                        using (var archive = new ZipArchive(memoryStream))
+                        var content = await response.Content.ReadAsStringAsync();
+                        if (!content.Contains("Invalid Content"))
                         {
-                            // Kiểm tra nếu có bất kỳ tệp nào không đúng định dạng
-                            if (archive.Entries.Any(entry => !IsDocOrDocx(entry.FullName)))
-                            {
-                                return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Tồn tại file không đúng định dạng trong zip", new CreatePost());
-                            }
-
-                            foreach (var entry in archive.Entries)
-                            {
-                                var entryMemoryStream = new MemoryStream();
-                                string fileName = Path.GetFileNameWithoutExtension(entry.Name);
-                                using (var entryStream = entry.Open())
-                                {
-                                    entryStream.CopyTo(entryMemoryStream);
-                                    entryMemoryStream.Position = 0;
-
-                                    bool created = await ConvertToHtml(entryMemoryStream, fileName, categories);
-                                    if (created) result.Success.Add(entry.FullName);
-                                    else result.Failed.Add(entry.FullName);
-                                }
-
-                            }
-                        }
-                        return new ResponseResult<CreatePost>(RetCodeEnum.Ok, RetCodeEnum.Ok.ToString(), result);
-                    }
-                    /*var rootName = file.FileName;
-                    var tempFolderPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), System.IO.Path.GetRandomFileName());
-                    Directory.CreateDirectory(tempFolderPath);
-
-                    var zipFilePath = System.IO.Path.Combine(tempFolderPath, file.FileName);
-                    using (var fileStream = new FileStream(zipFilePath, FileMode.Create))
-                    {
-                        await file.CopyToAsync(fileStream);
-                    }
-
-                    ZipFile.ExtractToDirectory(zipFilePath, tempFolderPath);
-
-                    var invalidFiles = Directory.EnumerateFiles(tempFolderPath, "*.*", SearchOption.AllDirectories)
-                                   .Where(filePath => !IsDocOrDocx(filePath, rootName))
-                                   .ToList();
-
-
-                    if (invalidFiles.Any())
-                    {
-                        return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "File không đúng định dạng", new CreatePost());
-                    }
-
-                    foreach (var docxFile in Directory.GetFiles(tempFolderPath, "*.doc*", SearchOption.AllDirectories))
-                    {
-                        using (MemoryStream docxMemoryStream = new MemoryStream())
-                        {
-                            using (FileStream docxFileStream = new FileStream(docxFile, FileMode.Open, FileAccess.Read))
-                            {
-                                await docxFileStream.CopyToAsync(docxMemoryStream);
-                            }
-                            string fileName = System.IO.Path.GetFileNameWithoutExtension(docxFile);
-                            bool created = await ConvertToHtml(docxMemoryStream, fileName, categories);
-                            if (created) result.Success.Add(fileName);
-                            else result.Failed.Add(fileName);
+                            return System.Web.HttpUtility.HtmlDecode(content);
                         }
                     }
 
-                    return new ResponseResult<CreatePost>(RetCodeEnum.Ok, RetCodeEnum.Ok.ToString(), result);*/
-
-                }
-                else
-                {
-                    return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "File không đúng định dạng", new CreatePost());
+                    return html;
                 }
             }
             catch (Exception ex)
             {
-                return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Đã có lỗi xảy ra", new CreatePost());
+                Console.WriteLine("inliner css failed");
+                return html;
             }
         }
-
         private bool IsDocOrDocx(string fileName)
         {
             return fileName.EndsWith(".doc", StringComparison.OrdinalIgnoreCase) ||
                    fileName.EndsWith(".docx", StringComparison.OrdinalIgnoreCase);
         }
-
         private async Task<CloudResult> Upload(ImageInfo image, string folder)
         {
             try
@@ -264,7 +275,6 @@ namespace api_word2wp.Controllers
             }
 
         }
-
         private class CloudResult
         {
             public CloudResult()
@@ -288,35 +298,7 @@ namespace api_word2wp.Controllers
             public string publicId { get; set; } = "";
             public int status { get; set; } = 0;
         }
+        #endregion
 
-
-        [HttpGet("categories")]
-        public async Task<ResponseResult<List<WpCategory>>> List()
-        {
-            List<WpCategory> categories = await _category.GetList();
-            return new ResponseResult<List<WpCategory>>(RetCodeEnum.Ok, RetCodeEnum.Ok.ToString(), categories);
-        }
-
-        private async Task<string> InlinerCSS(string html)
-        {
-            try
-            {
-                var client = new RestClient("https://templates.mailchimp.com/services/inline-css/");
-                var request = new RestRequest();
-                request.AddHeader("content-type", "application/x-www-form-urlencoded");
-                request.AddParameter("application/x-www-form-urlencoded", $"html={html}", ParameterType.RequestBody);
-                var response = await client.ExecutePostAsync(request);
-                if (response.StatusCode == System.Net.HttpStatusCode.OK && !response.Content.Contains("Invalid Content"))
-                {
-                    return response.Content;
-                }
-                return html;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine("inliner css failed");
-                return html;
-            }
-        }
     }
 }

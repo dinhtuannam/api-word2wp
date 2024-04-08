@@ -2,6 +2,7 @@
 using System.Threading.Tasks;
 using System;
 using RestSharp;
+using System.Net.Http;
 
 namespace api_word2wp.Implements
 {
@@ -12,24 +13,41 @@ namespace api_word2wp.Implements
         {
             try
             {
-                string url = "https://development.matbao.website/wp-json/mbwsapi/v1/create-post/";
-                var client = new RestClient(url);
-                var request = new RestRequest();
-                request.AddHeader("Api-Key", "MatBaoWS@1234");
-                request.AddHeader("content-type", "application/x-www-form-urlencoded");
-                request.AddParameter("application/x-www-form-urlencoded", $"title={title}&content={content}&categories={categories}&status=publish&thumb={thumbnail}", ParameterType.RequestBody);
-                var response = await client.ExecutePostAsync(request);
-                if (response.StatusCode != System.Net.HttpStatusCode.OK)
+                using (var client = new HttpClient())
                 {
-                    return false;
+                    string url = "https://development.matbao.website/wp-json/mbwsapi/v1/create-post/";
+
+                    // Tạo FormData
+                    var formData = new MultipartFormDataContent();
+                    formData.Add(new StringContent(title), "title");
+                    formData.Add(new StringContent(content), "content");
+                    formData.Add(new StringContent(categories), "categories");
+                    formData.Add(new StringContent(thumbnail), "thumb");
+                    formData.Add(new StringContent("publish"), "status");
+
+                    // Thêm header Api-Key
+                    client.DefaultRequestHeaders.Add("Api-Key", "MatBaoWS@1234");
+
+                    // Gửi yêu cầu POST
+                    var response = await client.PostAsync(url, formData);
+
+                    // Xử lý kết quả trả về
+                    if (response.IsSuccessStatusCode)
+                    {
+                        return true;
+                    }
+                    else
+                    {
+                        return false;
+                    }
                 }
-                return true;
             }
             catch (Exception ex)
             {
                 return false;
             }
         }
+
 
         /*public async Task<string> UploadImageContent(MemoryStream imageStream, string filename, string token)
         {
