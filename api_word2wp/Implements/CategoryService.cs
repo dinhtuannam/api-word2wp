@@ -12,11 +12,11 @@ namespace api_word2wp.Implements
     {
         public CategoryService() { }
 
-        public async Task<List<WpCategory>> GetList()
+        public async Task<List<WpCategory>> GetList(string url)
         {
             try
             {
-                var client = new RestClient("https://development.matbao.website/wp-json/mbwsapi/v1/category/list");
+                var client = new RestClient($"{url}/wp-json/mbwsapi/v1/category/list");
                 var request = new RestRequest();
                 request.AddHeader("Content-Type", "application/json");
                 request.AddHeader("Api-Key", "MatBaoWS@1234");

@@ -9,13 +9,13 @@ namespace api_word2wp.Implements
     public class PostService : IPostService
     {
         public PostService() { }
-        public async Task<bool> AddPost(string content, string title, string thumbnail, string categories)
+        public async Task<bool> AddPost(string content, string title, string thumbnail, string categories, string url)
         {
             try
             {
                 using (var client = new HttpClient())
                 {
-                    string url = "https://development.matbao.website/wp-json/mbwsapi/v1/create-post/";
+                    string api = $"{url}/wp-json/mbwsapi/v1/create-post/";
 
                     // Tạo FormData
                     var formData = new MultipartFormDataContent();
@@ -29,7 +29,7 @@ namespace api_word2wp.Implements
                     client.DefaultRequestHeaders.Add("Api-Key", "MatBaoWS@1234");
 
                     // Gửi yêu cầu POST
-                    var response = await client.PostAsync(url, formData);
+                    var response = await client.PostAsync(api, formData);
 
                     // Xử lý kết quả trả về
                     if (response.IsSuccessStatusCode)

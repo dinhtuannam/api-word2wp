@@ -6,6 +6,6 @@ namespace api_word2wp.Interfaces
 {
     public interface ICategoryService
     {
-        Task<List<WpCategory>> GetList();
+        Task<List<WpCategory>> GetList(string url);
     }
 }

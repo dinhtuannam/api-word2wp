@@ -45,12 +45,13 @@ namespace api_word2wp.Controllers
         }
 
         [HttpPost("upload")]
-        public async Task<ResponseResult<CreatePost>> UploadFileZip(List<IFormFile> files, string categories)
+        public async Task<ResponseResult<CreatePost>> UploadFileZip(List<IFormFile> files, string categories, string url)
         {
             try
             {
                 if (files.Count == 0) return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Vui lòng chọn file", new CreatePost());
                 if (string.IsNullOrEmpty(categories)) return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Vui lòng chọn thể loại ", new CreatePost());
+                if (string.IsNullOrEmpty(url)) return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Vui lòng nhập địa chỉ trang web ", new CreatePost());
                 CreatePost result = new CreatePost();
                 foreach (IFormFile file in files)
                 {
@@ -61,7 +62,7 @@ namespace api_word2wp.Controllers
                         {
                             file.CopyTo(memoryStream);
                             string fileName = Path.GetFileNameWithoutExtension(file.FileName);
-                            bool created = await ConvertToHtml(memoryStream, fileName, categories);
+                            bool created = await ConvertToHtml(memoryStream, fileName, categories, url);
                             if (created) result.Success.Add(file.FileName);
                             else result.Failed.Add(file.FileName);
                         }
@@ -77,7 +78,7 @@ namespace api_word2wp.Controllers
                             {
                                 if (archive.Entries.Any(entry => !IsDocOrDocx(entry.FullName)))
                                 {
-                                    return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Tồn tại file không đúng định dạng trong zip", new CreatePost());
+                                    return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "File zip chỉ có thể chứa file doc hoặc docx", new CreatePost());
                                 }
                                 foreach (var entry in archive.Entries)
                                 {
@@ -88,7 +89,7 @@ namespace api_word2wp.Controllers
                                         entryStream.CopyTo(entryMemoryStream);
                                         entryMemoryStream.Position = 0;
 
-                                        bool created = await ConvertToHtml(entryMemoryStream, fileName, categories);
+                                        bool created = await ConvertToHtml(entryMemoryStream, fileName, categories, url);
                                         if (created) result.Success.Add(entry.FullName);
                                         else result.Failed.Add(entry.FullName);
                                     }
@@ -102,7 +103,9 @@ namespace api_word2wp.Controllers
                     }
                 }
 
-                return new ResponseResult<CreatePost>(RetCodeEnum.Ok, RetCodeEnum.Ok.ToString(), result);
+                if(result.Success.Count > 0) return new ResponseResult<CreatePost>(RetCodeEnum.Ok, "Upload file thành công", result);
+                else return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Upload file thất bại", result);
+
             }
             catch (Exception ex)
             {
@@ -111,13 +114,13 @@ namespace api_word2wp.Controllers
         }
 
         [HttpGet("categories")]
-        public async Task<ResponseResult<List<WpCategory>>> List()
+        public async Task<ResponseResult<List<WpCategory>>> List(string url)
         {
-            List<WpCategory> categories = await _category.GetList();
+            List<WpCategory> categories = await _category.GetList(url);
             return new ResponseResult<List<WpCategory>>(RetCodeEnum.Ok, RetCodeEnum.Ok.ToString(), categories);
         }
 
-        private async Task<bool> ConvertToHtml(Stream memoryStream, string fileName, string category)
+        private async Task<bool> ConvertToHtml(Stream memoryStream, string fileName, string category,string url)
         {
             bool result = false;
             int index = 1;
@@ -131,7 +134,7 @@ namespace api_word2wp.Controllers
                 CssClassPrefix = "cls-",
                 RestrictToSupportedLanguages = false,
                 RestrictToSupportedNumberingFormats = false,
-                AdditionalCss = ".cls-000016 { width: 100%!important }",
+                AdditionalCss = ".cls-000016 { width: 100%!important } img { margin : 6px 0px; } body { font-family: Arial, sans-serif !important;}",
                 ImageHandler = (imageInfo) =>
                 {
                     async Task<XElement> HandleImageAsync(ImageInfo info)
@@ -163,13 +166,14 @@ namespace api_word2wp.Controllers
 
                     XElement htmlElement = new XElement(Xhtml.html, html);
 
+                    htmlString = htmlElement.ToString();
                     htmlString = RemoveLRMCharacter(htmlString);
                     htmlString = RemoveHtmlTags(htmlString);
                     htmlString = await InlinerCSS(htmlString);
 
                     if (!string.IsNullOrEmpty(htmlString))
                     {
-                        result = await _post.AddPost(htmlString, fileName, thumbnail, category);
+                        result = await _post.AddPost(htmlString, fileName, thumbnail, category, url);
                     }
                 }
             }
