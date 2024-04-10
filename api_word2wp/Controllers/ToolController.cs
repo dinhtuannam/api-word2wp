@@ -22,6 +22,7 @@ using System.Linq;
 using DocumentFormat.OpenXml.Vml.Office;
 using System.Text.RegularExpressions;
 using System.Net.Http;
+using DocumentFormat.OpenXml.Wordprocessing;
 
 namespace api_word2wp.Controllers
 {
@@ -134,7 +135,7 @@ namespace api_word2wp.Controllers
                 CssClassPrefix = "cls-",
                 RestrictToSupportedLanguages = false,
                 RestrictToSupportedNumberingFormats = false,
-                AdditionalCss = ".cls-000016 { width: 100%!important } img { margin : 6px 0px; } body { font-family: Arial, sans-serif !important;}",
+                AdditionalCss = "span { width: fit-content!important } img { margin : 6px 0px; } body { font-family: Arial, sans-serif !important;}",
                 ImageHandler = (imageInfo) =>
                 {
                     async Task<XElement> HandleImageAsync(ImageInfo info)
@@ -162,6 +163,30 @@ namespace api_word2wp.Controllers
             {
                 using (WordprocessingDocument doc = WordprocessingDocument.Open(memoryStream, true))
                 {
+                    var numberingDefinitionsPart = doc.MainDocumentPart.NumberingDefinitionsPart;
+                    if (numberingDefinitionsPart != null)
+                    {
+                        Numbering numbering = numberingDefinitionsPart.Numbering;
+
+                        if (numbering != null)
+                        {
+                            foreach (var num in numbering.Descendants<NumberingInstance>())
+                            {
+                                string abstractNumId = num.AbstractNumId.Val;
+                                AbstractNum abstractNum = numbering.Descendants<AbstractNum>().FirstOrDefault(an => an.AbstractNumberId == abstractNumId);
+
+                                if (abstractNum != null)
+                                {
+                                    foreach (var level in abstractNum.Descendants<Level>())
+                                    {
+                                        level.LevelJustification = new LevelJustification { Val = LevelJustificationValues.Left };
+                                    }
+                                }
+                            }
+                            doc.Save();
+                        }
+                    }
+
                     XElement html = OpenXmlPowerTools.HtmlConverter.ConvertToHtml(doc, convSettings);
 
                     XElement htmlElement = new XElement(Xhtml.html, html);
@@ -303,6 +328,31 @@ namespace api_word2wp.Controllers
             public int status { get; set; } = 0;
         }
         #endregion
-
+        private void ConvertNumberingFromRomanToDecimal(WordprocessingDocument doc)
+        {
+            try
+            {
+                var numberingPart = doc.MainDocumentPart.NumberingDefinitionsPart;
+                if (numberingPart != null)
+                {
+                    var numbering = numberingPart.Numbering;
+                    foreach (var abstractNum in numbering.Elements<AbstractNum>())
+                    {
+                        foreach (var lvl in abstractNum.Elements<Level>())
+                        {
+                            if (lvl.NumberingFormat != null && lvl.NumberingFormat.Val.HasValue && lvl.NumberingFormat.Val.Value == NumberFormatValues.LowerRoman)
+                            {
+                                lvl.NumberingFormat.Val = NumberFormatValues.Decimal;
+                            }
+                        }
+                    }
+                    numbering.Save();
+                }
+            }
+            catch (Exception ex)
+            {
+                throw new Exception($"Lỗi trong quá trình chuyển đổi đánh số: {ex.Message}");
+            }
+        }
     }
 }

@@ -46,3 +46,6 @@
 /api_word2wp/obj/Debug/netcoreapp3.1/api_word2wp.AssemblyInfo.cs
 /api_word2wp/obj/Debug/netcoreapp3.1/api_word2wp.AssemblyInfoInputs.cache
 /api_word2wp/Properties/PublishProfiles/FolderProfile.pubxml.user
+*.dylib
+/.vs/api_word2wp/DesignTimeBuild/.dtbcache.v2
+/api_word2wp/obj/Debug/netcoreapp3.1/api_word2wp.csproj.CoreCompileInputs.cache
