@@ -57,17 +57,19 @@ namespace api_word2wp.Controllers
                 foreach (IFormFile file in files)
                 {
                     var extension = System.IO.Path.GetExtension(file.FileName);
+                    // ************* Upload file word *************
                     if (extension == ".doc" || extension == ".docx")
                     {
                         using (MemoryStream memoryStream = new MemoryStream())
                         {
                             file.CopyTo(memoryStream);
                             string fileName = Path.GetFileNameWithoutExtension(file.FileName);
-                            bool created = await ConvertToHtml(memoryStream, fileName, categories, url);
+                            bool created = await ConvertToHtml(memoryStream, fileName, categories, url); // Convert word sang html
                             if (created) result.Success.Add(file.FileName);
                             else result.Failed.Add(file.FileName);
                         }
                     }
+                    // ************* Upload file zip *************
                     else if (extension == ".zip")
                     {
                         using (var memoryStream = new MemoryStream())
@@ -75,9 +77,10 @@ namespace api_word2wp.Controllers
                             file.CopyTo(memoryStream);
                             memoryStream.Position = 0;
 
+                            // ************* Giải nén file zip *************
                             using (var archive = new ZipArchive(memoryStream))
                             {
-                                if (archive.Entries.Any(entry => !IsDocOrDocx(entry.FullName)))
+                                if (archive.Entries.Any(entry => !IsDocOrDocx(entry.FullName))) // Return nếu zip chứa file không đúng định dạng
                                 {
                                     return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "File zip chỉ có thể chứa file doc hoặc docx", new CreatePost());
                                 }
@@ -90,7 +93,7 @@ namespace api_word2wp.Controllers
                                         entryStream.CopyTo(entryMemoryStream);
                                         entryMemoryStream.Position = 0;
 
-                                        bool created = await ConvertToHtml(entryMemoryStream, fileName, categories, url);
+                                        bool created = await ConvertToHtml(entryMemoryStream, fileName, categories, url); // Convert word sang html
                                         if (created) result.Success.Add(entry.FullName);
                                         else result.Failed.Add(entry.FullName);
                                     }
@@ -129,23 +132,27 @@ namespace api_word2wp.Controllers
             string htmlString = "";
             string thumbnail = "";
 
+            // Setting convert html
             HtmlConverterSettings convSettings = new HtmlConverterSettings()
             {
-                FabricateCssClasses = true,
-                CssClassPrefix = "cls-",
-                RestrictToSupportedLanguages = false,
-                RestrictToSupportedNumberingFormats = false,
+                FabricateCssClasses = true,                       // Tự động generate các class css
+                CssClassPrefix = "cls-",                          // Tiền tố css
+                RestrictToSupportedLanguages = false,             // Tất cả các ngôn ngữ sẽ được chuyển đổi, ngay cả khi không được hỗ trợ.
+                RestrictToSupportedNumberingFormats = false,      // Tất cả các định dạng số sẽ được chuyển đổi, ngay cả khi không được hỗ trợ.
                 AdditionalCss = "span { width: fit-content!important } img { margin : 6px 0px; } body { font-family: Arial, sans-serif !important;}",
-                ImageHandler = (imageInfo) =>
+                ImageHandler = (imageInfo) => // Config hình ảnh
                 {
                     async Task<XElement> HandleImageAsync(ImageInfo info)
                     {
+                        // Upload hình ảnh lên cloud
                         CloudResult cloudResult = await Upload(imageInfo, "word_images");
                         string imagePath = cloudResult != null && cloudResult.status == 200 ? cloudResult.path : "";
                         if (index == 1)
                         {
-                            thumbnail = imagePath;
+                            thumbnail = imagePath; // thumbnail là ảnh đầu tiên trong file
                         }
+
+                        // Chuyển đổi hình ảnh trong file word
                         XElement img = new XElement(Xhtml.img,
                                new XAttribute(NoNamespace.src, imagePath),
                                imageInfo.ImgStyleAttribute,
@@ -163,6 +170,7 @@ namespace api_word2wp.Controllers
             {
                 using (WordprocessingDocument doc = WordprocessingDocument.Open(memoryStream, true))
                 {
+                    // ***************** Format numbering alignment thành Left ****************
                     var numberingDefinitionsPart = doc.MainDocumentPart.NumberingDefinitionsPart;
                     if (numberingDefinitionsPart != null)
                     {
@@ -187,18 +195,19 @@ namespace api_word2wp.Controllers
                         }
                     }
 
+                    // ***************** Tiến hành convert ****************
                     XElement html = OpenXmlPowerTools.HtmlConverter.ConvertToHtml(doc, convSettings);
 
                     XElement htmlElement = new XElement(Xhtml.html, html);
 
                     htmlString = htmlElement.ToString();
-                    htmlString = RemoveLRMCharacter(htmlString);
-                    htmlString = RemoveHtmlTags(htmlString);
-                    htmlString = await InlinerCSS(htmlString);
+                    htmlString = RemoveLRMCharacter(htmlString); // Remove các kí tự đặc biệt
+                    htmlString = RemoveHtmlTags(htmlString);     // Remove các thẻ <html/> , <meta/> , <head/>
+                    htmlString = await InlinerCSS(htmlString);   // Css Inline
 
                     if (!string.IsNullOrEmpty(htmlString))
                     {
-                        result = await _post.AddPost(htmlString, fileName, thumbnail, category, url);
+                        result = await _post.AddPost(htmlString, fileName, thumbnail, category, url); // Tạo post
                     }
                 }
             }
@@ -328,31 +337,6 @@ namespace api_word2wp.Controllers
             public int status { get; set; } = 0;
         }
         #endregion
-        private void ConvertNumberingFromRomanToDecimal(WordprocessingDocument doc)
-        {
-            try
-            {
-                var numberingPart = doc.MainDocumentPart.NumberingDefinitionsPart;
-                if (numberingPart != null)
-                {
-                    var numbering = numberingPart.Numbering;
-                    foreach (var abstractNum in numbering.Elements<AbstractNum>())
-                    {
-                        foreach (var lvl in abstractNum.Elements<Level>())
-                        {
-                            if (lvl.NumberingFormat != null && lvl.NumberingFormat.Val.HasValue && lvl.NumberingFormat.Val.Value == NumberFormatValues.LowerRoman)
-                            {
-                                lvl.NumberingFormat.Val = NumberFormatValues.Decimal;
-                            }
-                        }
-                    }
-                    numbering.Save();
-                }
-            }
-            catch (Exception ex)
-            {
-                throw new Exception($"Lỗi trong quá trình chuyển đổi đánh số: {ex.Message}");
-            }
-        }
+
     }
 }

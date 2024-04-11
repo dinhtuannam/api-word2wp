@@ -49,3 +49,7 @@
 *.dylib
 /.vs/api_word2wp/DesignTimeBuild/.dtbcache.v2
 /api_word2wp/obj/Debug/netcoreapp3.1/api_word2wp.csproj.CoreCompileInputs.cache
+/.vs/api_word2wp/DesignTimeBuild/.dtbcache.v2
+*.json
+*.wsuo
+/api_word2wp/obj/Release/netcoreapp3.1/api_word2wp.csproj.CoreCompileInputs.cache
