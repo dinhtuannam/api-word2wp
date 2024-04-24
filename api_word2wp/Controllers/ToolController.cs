@@ -23,6 +23,7 @@ using DocumentFormat.OpenXml.Vml.Office;
 using System.Text.RegularExpressions;
 using System.Net.Http;
 using DocumentFormat.OpenXml.Wordprocessing;
+using Microsoft.AspNetCore.Html;
 
 namespace api_word2wp.Controllers
 {
@@ -36,9 +37,9 @@ namespace api_word2wp.Controllers
         public ToolController(ICategoryService category, IPostService post)
         {
             var cloudinaryAccount = new Account(
-                "dczpqymrv",
-                "545529419662769",
-                "U6CSGR8_K6_WMr3yEpxBO8T2Ka4"
+                "dczpqymrv",                    // Cloud name
+                "545529419662769",              // API Key
+                "U6CSGR8_K6_WMr3yEpxBO8T2Ka4"   // API Secret
             );
             _cloudinary = new Cloudinary(cloudinaryAccount);
             _category = category;
@@ -140,12 +141,12 @@ namespace api_word2wp.Controllers
                 RestrictToSupportedLanguages = false,             // Tất cả các ngôn ngữ sẽ được chuyển đổi, ngay cả khi không được hỗ trợ.
                 RestrictToSupportedNumberingFormats = false,      // Tất cả các định dạng số sẽ được chuyển đổi, ngay cả khi không được hỗ trợ.
                 AdditionalCss = "span { width: fit-content!important } img { margin : 6px 0px; } body { font-family: Arial, sans-serif !important;}",
-                ImageHandler = (imageInfo) => // Config hình ảnh
+                ImageHandler = (imageInfo) =>                     // Config hình ảnh
                 {
                     async Task<XElement> HandleImageAsync(ImageInfo info)
                     {
-                        // Upload hình ảnh lên cloud
-                        CloudResult cloudResult = await Upload(imageInfo, "word_images");
+                        string mediaType = info.ContentType;
+                        CloudResult cloudResult = await Upload(imageInfo, "word_images",mediaType);
                         string imagePath = cloudResult != null && cloudResult.status == 200 ? cloudResult.path : "";
                         if (index == 1)
                         {
@@ -204,6 +205,9 @@ namespace api_word2wp.Controllers
                     htmlString = RemoveLRMCharacter(htmlString); // Remove các kí tự đặc biệt
                     htmlString = RemoveHtmlTags(htmlString);     // Remove các thẻ <html/> , <meta/> , <head/>
                     htmlString = await InlinerCSS(htmlString);   // Css Inline
+
+                    htmlString = Regex.Replace(htmlString, "\\n", "");
+                    htmlString = Regex.Replace(htmlString, "\\r", "");
 
                     if (!string.IsNullOrEmpty(htmlString))
                     {
@@ -279,13 +283,14 @@ namespace api_word2wp.Controllers
             return fileName.EndsWith(".doc", StringComparison.OrdinalIgnoreCase) ||
                    fileName.EndsWith(".docx", StringComparison.OrdinalIgnoreCase);
         }
-        private async Task<CloudResult> Upload(ImageInfo image, string folder)
+        private async Task<CloudResult> Upload(ImageInfo image, string folder, string type)
         {
             try
             {
                 using (MemoryStream memoryStream = new MemoryStream())
                 {
-                    image.Bitmap.Save(memoryStream, ImageFormat.Jpeg);
+                    if(type.Contains("gif")) image.Bitmap.Save(memoryStream, ImageFormat.Gif);
+                    else image.Bitmap.Save(memoryStream, ImageFormat.Jpeg);
                     memoryStream.Position = 0;
                     byte[] imageBytes = memoryStream.ToArray();
 
