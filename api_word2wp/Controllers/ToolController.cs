@@ -108,7 +108,7 @@ namespace api_word2wp.Controllers
                     }
                 }
 
-                if(result.Success.Count > 0) return new ResponseResult<CreatePost>(RetCodeEnum.Ok, "Upload file thành công", result);
+                if (result.Success.Count > 0) return new ResponseResult<CreatePost>(RetCodeEnum.Ok, "Upload file thành công", result);
                 else return new ResponseResult<CreatePost>(RetCodeEnum.ApiError, "Upload file thất bại", result);
 
             }
@@ -125,7 +125,7 @@ namespace api_word2wp.Controllers
             return new ResponseResult<List<WpCategory>>(RetCodeEnum.Ok, RetCodeEnum.Ok.ToString(), categories);
         }
 
-        private async Task<bool> ConvertToHtml(Stream memoryStream, string fileName, string category,string url)
+        private async Task<bool> ConvertToHtml(Stream memoryStream, string fileName, string category, string url)
         {
             bool result = false;
             int index = 1;
@@ -140,13 +140,13 @@ namespace api_word2wp.Controllers
                 CssClassPrefix = "cls-",                          // Tiền tố css
                 RestrictToSupportedLanguages = false,             // Tất cả các ngôn ngữ sẽ được chuyển đổi, ngay cả khi không được hỗ trợ.
                 RestrictToSupportedNumberingFormats = false,      // Tất cả các định dạng số sẽ được chuyển đổi, ngay cả khi không được hỗ trợ.
-                AdditionalCss = "span { width: fit-content!important } img { margin : 6px 0px; } body { font-family: Arial, sans-serif !important;}",
+                AdditionalCss = "span { width: fit-content!important } img { margin : 6px 0px; height: auto!important;}",
                 ImageHandler = (imageInfo) =>                     // Config hình ảnh
                 {
                     async Task<XElement> HandleImageAsync(ImageInfo info)
                     {
                         string mediaType = info.ContentType;
-                        CloudResult cloudResult = await Upload(imageInfo, "word_images",mediaType);
+                        CloudResult cloudResult = await Upload(imageInfo, "word_images", mediaType);
                         string imagePath = cloudResult != null && cloudResult.status == 200 ? cloudResult.path : "";
                         if (index == 1)
                         {
@@ -155,9 +155,9 @@ namespace api_word2wp.Controllers
 
                         // Chuyển đổi hình ảnh trong file word
                         XElement img = new XElement(Xhtml.img,
-                               new XAttribute(NoNamespace.src, imagePath),
-                               imageInfo.ImgStyleAttribute,
-                               imageInfo.AltText != null ? new XAttribute(NoNamespace.alt, imageInfo.AltText) : null);
+                                        new XAttribute(NoNamespace.src, imagePath),
+                                        imageInfo.AltText != null ? new XAttribute(NoNamespace.alt, imageInfo.AltText) : null,
+                                        new XAttribute(NoNamespace.style, "width: auto; height: auto;"));
 
                         index++;
                         return img;
@@ -205,10 +205,12 @@ namespace api_word2wp.Controllers
                     htmlString = RemoveLRMCharacter(htmlString); // Remove các kí tự đặc biệt
                     htmlString = RemoveHtmlTags(htmlString);     // Remove các thẻ <html/> , <meta/> , <head/>
                     htmlString = await InlinerCSS(htmlString);   // Css Inline
-
+                    
                     htmlString = Regex.Replace(htmlString, "\\n", "");
                     htmlString = Regex.Replace(htmlString, "\\r", "");
-
+                    htmlString = RemoveFontFamily(htmlString);
+                    string pattern = @"font-size\s*:\s*[^;']*;";
+                    htmlString = Regex.Replace(htmlString, pattern, string.Empty);
                     if (!string.IsNullOrEmpty(htmlString))
                     {
                         result = await _post.AddPost(htmlString, fileName, thumbnail, category, url); // Tạo post
@@ -289,7 +291,7 @@ namespace api_word2wp.Controllers
             {
                 using (MemoryStream memoryStream = new MemoryStream())
                 {
-                    if(type.Contains("gif")) image.Bitmap.Save(memoryStream, ImageFormat.Gif);
+                    if (type.Contains("gif")) image.Bitmap.Save(memoryStream, ImageFormat.Gif);
                     else image.Bitmap.Save(memoryStream, ImageFormat.Jpeg);
                     memoryStream.Position = 0;
                     byte[] imageBytes = memoryStream.ToArray();
@@ -300,6 +302,7 @@ namespace api_word2wp.Controllers
                         File = new FileDescription(new Guid().ToString(), memoryStream),
                         PublicId = Guid.NewGuid().ToString(),
                         Folder = folder,
+                        Transformation = null
                     };
 
                     ImageUploadResult result = await _cloudinary.UploadAsync(uploadParams);
@@ -343,5 +346,73 @@ namespace api_word2wp.Controllers
         }
         #endregion
 
+        [HttpGet("test")]
+        public IActionResult test(string html)
+        {
+           
+            return Ok(RemoveFontFamily(html));
+        }
+
+        private string RemoveFontFamily(string html)
+        {
+            HtmlDocument doc = new HtmlDocument();
+            doc.LoadHtml(html);
+
+            HtmlNodeCollection spanNodes = doc.DocumentNode.SelectNodes("//span");
+
+            if (spanNodes != null)
+            {
+                foreach (HtmlNode node in spanNodes)
+                {
+                    string fontFamily = GetFontFamily(node.GetAttributeValue("style", ""));
+
+                    if (fontFamily != "Symbol")
+                    {
+                        node.Attributes["style"].Value = HandleRemoveFontFamily(node.GetAttributeValue("style", ""));
+                    }
+                }
+            }
+
+
+            HtmlNodeCollection pNode = doc.DocumentNode.SelectNodes("//p");
+            if (pNode != null)
+            {
+                foreach (HtmlNode node in pNode)
+                {
+                    node.Attributes["style"].Value = HandleRemoveFontFamily(node.GetAttributeValue("style", ""));
+                }
+            }
+
+            string modifiedHtml = doc.DocumentNode.OuterHtml;
+            return modifiedHtml;
+        }
+
+        private string GetFontFamily(string style)
+        {
+            string[] attributes = style.Split(';');
+            foreach (string attribute in attributes)
+            {
+                if (attribute.Trim().StartsWith("font-family:"))
+                {
+                    string fontFamily = attribute.Trim().Substring(12).Trim();
+                    return fontFamily;
+                }
+            }
+            return "";
+        }
+
+        private string HandleRemoveFontFamily(string style)
+        {
+            string[] attributes = style.Split(';');
+            List<string> updatedAttributes = new List<string>();
+            foreach (string attribute in attributes)
+            {
+                if (!attribute.Trim().StartsWith("font-family"))
+                {
+                    updatedAttributes.Add(attribute.Trim());
+                }
+            }
+            return string.Join("; ", updatedAttributes);
+        }
     }
 }
