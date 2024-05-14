@@ -23,7 +23,7 @@ using DocumentFormat.OpenXml.Vml.Office;
 using System.Text.RegularExpressions;
 using System.Net.Http;
 using DocumentFormat.OpenXml.Wordprocessing;
-using Microsoft.AspNetCore.Html;
+using System.Net;
 
 namespace api_word2wp.Controllers
 {
@@ -31,17 +31,15 @@ namespace api_word2wp.Controllers
     [ApiController]
     public class ToolController : ControllerBase
     {
-        private readonly Cloudinary _cloudinary;
         private readonly ICategoryService _category;
         private readonly IPostService _post;
+        private string ftpServerUrl = "ftp://cloud.word2web.matbaows.com";
+        private string ftpUsername = "cloudmbwsftp";
+        private string ftpPassword = "Jn3%81v2e";
+
+
         public ToolController(ICategoryService category, IPostService post)
         {
-            var cloudinaryAccount = new Account(
-                "dczpqymrv",                    // Cloud name
-                "545529419662769",              // API Key
-                "U6CSGR8_K6_WMr3yEpxBO8T2Ka4"   // API Secret
-            );
-            _cloudinary = new Cloudinary(cloudinaryAccount);
             _category = category;
             _post = post;
         }
@@ -146,8 +144,7 @@ namespace api_word2wp.Controllers
                     async Task<XElement> HandleImageAsync(ImageInfo info)
                     {
                         string mediaType = info.ContentType;
-                        CloudResult cloudResult = await Upload(imageInfo, "word_images", mediaType);
-                        string imagePath = cloudResult != null && cloudResult.status == 200 ? cloudResult.path : "";
+                        string imagePath = Upload(info, mediaType);
                         if (index == 1)
                         {
                             thumbnail = imagePath; // thumbnail là ảnh đầu tiên trong file
@@ -225,6 +222,9 @@ namespace api_word2wp.Controllers
             return result;
         }
 
+
+        
+
         #region ======= Xử lí html =======
         private string RemoveLRMCharacter(string htmlString)
         {
@@ -285,74 +285,6 @@ namespace api_word2wp.Controllers
             return fileName.EndsWith(".doc", StringComparison.OrdinalIgnoreCase) ||
                    fileName.EndsWith(".docx", StringComparison.OrdinalIgnoreCase);
         }
-        private async Task<CloudResult> Upload(ImageInfo image, string folder, string type)
-        {
-            try
-            {
-                using (MemoryStream memoryStream = new MemoryStream())
-                {
-                    if (type.Contains("gif")) image.Bitmap.Save(memoryStream, ImageFormat.Gif);
-                    else image.Bitmap.Save(memoryStream, ImageFormat.Jpeg);
-                    memoryStream.Position = 0;
-                    byte[] imageBytes = memoryStream.ToArray();
-
-                    string base64String = Convert.ToBase64String(imageBytes);
-                    ImageUploadParams uploadParams = new ImageUploadParams
-                    {
-                        File = new FileDescription(new Guid().ToString(), memoryStream),
-                        PublicId = Guid.NewGuid().ToString(),
-                        Folder = folder,
-                        Transformation = null
-                    };
-
-                    ImageUploadResult result = await _cloudinary.UploadAsync(uploadParams);
-
-                    if (result.Error != null)
-                    {
-                        return new CloudResult();
-                    }
-
-                    return new CloudResult(result.DisplayName, result.SecureUrl.ToString(), result.PublicId, (int)result.StatusCode);
-                }
-            }
-            catch (Exception ex)
-            {
-                return new CloudResult();
-            }
-
-        }
-        private class CloudResult
-        {
-            public CloudResult()
-            {
-                name = "";
-                path = "";
-                publicId = "";
-                status = 0;
-            }
-
-            public CloudResult(string name, string path, string publicId, int status)
-            {
-                this.name = name;
-                this.path = path;
-                this.publicId = publicId;
-                this.status = status;
-            }
-
-            public string name { get; set; } = "";
-            public string path { get; set; } = "";
-            public string publicId { get; set; } = "";
-            public int status { get; set; } = 0;
-        }
-        #endregion
-
-        [HttpGet("test")]
-        public IActionResult test(string html)
-        {
-           
-            return Ok(RemoveFontFamily(html));
-        }
-
         private string RemoveFontFamily(string html)
         {
             HtmlDocument doc = new HtmlDocument();
@@ -386,7 +318,6 @@ namespace api_word2wp.Controllers
             string modifiedHtml = doc.DocumentNode.OuterHtml;
             return modifiedHtml;
         }
-
         private string GetFontFamily(string style)
         {
             string[] attributes = style.Split(';');
@@ -400,7 +331,6 @@ namespace api_word2wp.Controllers
             }
             return "";
         }
-
         private string HandleRemoveFontFamily(string style)
         {
             string[] attributes = style.Split(';');
@@ -414,5 +344,123 @@ namespace api_word2wp.Controllers
             }
             return string.Join("; ", updatedAttributes);
         }
+        #endregion
+
+        #region ======= Xử lí hình ảnh =======
+        private bool IsImageFile(string fileName)
+        {
+            // Định dạng tệp tin hình ảnh
+            string[] imageExtensions = { ".jpg", ".jpeg", ".png", ".gif", ".bmp" };
+
+            // Kiểm tra định dạng của tệp tin
+            foreach (string extension in imageExtensions)
+            {
+                if (fileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        private string Upload(ImageInfo imageInfo,string type)
+        {
+            string fileType = type.Contains("gif") ? ".gif" : ".jpeg";
+            string fileName = Guid.NewGuid().ToString() + fileType;
+            string ftpFilePath = $"{ftpServerUrl}/{fileName}";
+
+            try
+            {
+                // Tạo kết nối FTP
+                FtpWebRequest request = (FtpWebRequest)WebRequest.Create(ftpFilePath);
+                request.Method = WebRequestMethods.Ftp.UploadFile;
+                request.Credentials = new NetworkCredential(ftpUsername, ftpPassword);
+
+                // Upload hình ảnh
+                using (Stream ftpStream = request.GetRequestStream())
+                using (MemoryStream memoryStream = new MemoryStream())
+                {
+                    if (type.Contains("gif")) imageInfo.Bitmap.Save(memoryStream, ImageFormat.Gif);
+                    else imageInfo.Bitmap.Save(memoryStream, ImageFormat.Jpeg);
+                    memoryStream.Position = 0;
+                    byte[] buffer = new byte[10240];
+                    int bytesRead;
+                    while ((bytesRead = memoryStream.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        ftpStream.Write(buffer, 0, bytesRead);
+                    }
+                }
+
+                FtpWebResponse response = (FtpWebResponse)request.GetResponse();
+                if (response.StatusCode == FtpStatusCode.ClosingData)
+                {
+                    return "https://cloud.word2web.matbaows.com/" + fileName;
+                }
+                else
+                {
+                    return "";
+                }
+            }
+            catch (Exception ex)
+            {
+                return "";
+            }
+        }
+
+        [HttpGet("image")]
+        public ResponseResult<List<string>> GetImage()
+        {
+            List<string> imageFiles = new List<string>();
+
+            try
+            {
+
+                FtpWebRequest request = (FtpWebRequest)WebRequest.Create(ftpServerUrl);
+                request.Method = WebRequestMethods.Ftp.ListDirectoryDetails;
+                request.Credentials = new NetworkCredential(ftpUsername, ftpPassword);
+
+                using (FtpWebResponse response = (FtpWebResponse)request.GetResponse())
+                using (Stream responseStream = response.GetResponseStream())
+                using (StreamReader reader = new StreamReader(responseStream))
+                {
+                    string line;
+                    while ((line = reader.ReadLine()) != null)
+                    {
+                        if (IsImageFile(line))
+                        {
+                            imageFiles.Add(line);
+                        }
+                    }
+                }
+
+                return new ResponseResult<List<string>>(RetCodeEnum.Ok, "Thành công", imageFiles);
+            }
+            catch (Exception ex)
+            {
+                return new ResponseResult<List<string>>(RetCodeEnum.ApiError, "Đã có lỗi xảy ra", new List<string>());
+            }
+        }
+
+        [HttpDelete("image")]
+        public ResponseResult<string> DeleteImage(string image)
+        {
+            try
+            {
+                FtpWebRequest request = (FtpWebRequest)WebRequest.Create(ftpServerUrl + "/" + image);
+                request.Method = WebRequestMethods.Ftp.DeleteFile;
+                request.Credentials = new NetworkCredential(ftpUsername, ftpPassword);
+
+                using (FtpWebResponse response = (FtpWebResponse)request.GetResponse())
+                {
+                    return new ResponseResult<string>(RetCodeEnum.Ok, $"File đã được xóa từ FTP server. Mã trạng thái: {response.StatusDescription}", "");
+                }
+            }
+            catch (WebException ex)
+            {
+                return new ResponseResult<string>(RetCodeEnum.ApiError, "Đã có lỗi xảy ra", "");
+            }
+        }
+
+        #endregion
     }
 }
